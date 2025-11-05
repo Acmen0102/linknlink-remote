@@ -62,4 +62,3 @@
   "ports_description": {},
   "image": "ghcr.io/acmen0102/linknlink-remote-frpc-{arch}"
 }
-
