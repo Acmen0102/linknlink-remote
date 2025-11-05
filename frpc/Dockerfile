@@ -13,13 +13,20 @@ RUN apk add --no-cache \
 # 定义 frp 版本和架构
 ARG FRP_VERSION=0.52.3
 ARG TARGETARCH
+ARG TARGETVARIANT
 
 # 根据架构设置下载URL
-# 注意: Home Assistant 使用 TARGETARCH，但 frp 发布包使用不同的架构名称
+# 注意: Home Assistant 使用 TARGETARCH 和 TARGETVARIANT，但 frp 发布包使用不同的架构名称
 RUN case ${TARGETARCH} in \
     "amd64") FRP_ARCH="amd64" ;; \
     "arm64"|"aarch64") FRP_ARCH="arm64" ;; \
-    "arm") FRP_ARCH="arm" ;; \
+    "arm") \
+        case ${TARGETVARIANT} in \
+            "v6") FRP_ARCH="arm" ;; \
+            "v7") FRP_ARCH="arm" ;; \
+            *) FRP_ARCH="arm" ;; \
+        esac \
+        ;; \
     "386"|"i386") FRP_ARCH="386" ;; \
     *) echo "Unsupported architecture: ${TARGETARCH}" && exit 1 ;; \
     esac && \

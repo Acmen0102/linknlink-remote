@@ -45,7 +45,7 @@ homeassistant:
 
 ## 快速开始
 
-查看 [frpc/QUICKSTART.md](frpc/QUICKSTART.md) 了解详细的使用说明。
+查看 [frpc/README.md](frpc/README.md) 了解详细的使用说明。
 
 ## 仓库结构
 
@@ -57,9 +57,7 @@ homeassistant:
     ├── config.json         # Add-on 配置
     ├── Dockerfile          # Docker 镜像构建文件
     ├── run.sh              # 启动脚本
-    ├── README.md           # 详细文档
-    ├── QUICKSTART.md       # 快速开始指南
-    └── CHANGELOG.md        # 更新日志
+    └── README.md           # 详细文档
 ```
 
 ## 使用前准备
@@ -116,7 +114,6 @@ homeassistant:
 - 确认仓库是公开的
 - 确认 `repository.json` 文件格式正确
 - 检查网络连接
-- **如果遇到连接 GitHub 失败的错误**，请查看：[TROUBLESHOOTING_GITHUB_CONNECTION.md](TROUBLESHOOTING_GITHUB_CONNECTION.md)
 
 ### 加载项无法显示
 
@@ -131,15 +128,13 @@ homeassistant:
 - 确认网络连接正常（需要下载依赖资源）
 - 查看 Supervisor 日志
 
-### Docker 镜像拉取超时/失败
+### Docker 镜像构建超时/失败
 
-如果遇到类似 `Client.Timeout exceeded while awaiting headers` 或 `404 Not Found` 错误，通常是网络连接问题：
+如果遇到构建超时或网络连接问题：
 
 - **国内用户**：推荐配置 Docker 镜像加速器
-  - 详细配置方法请查看：[DOCKER_MIRROR_SETUP.md](DOCKER_MIRROR_SETUP.md)
   - 常用镜像加速器：中科大、网易、百度云、阿里云
 - **使用代理的用户**：需要在 Home Assistant 服务器上配置 Docker 代理
-  - 参考 [DOCKER_MIRROR_SETUP.md](DOCKER_MIRROR_SETUP.md) 中的方法 3
 
 ## 贡献
 

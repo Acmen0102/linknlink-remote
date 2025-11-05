@@ -8,8 +8,6 @@
 *.tmp
 *.bak
 *~
-*.md
-*.sh
 
 # IDE
 .vscode/
