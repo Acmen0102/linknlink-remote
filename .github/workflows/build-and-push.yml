@@ -74,22 +74,64 @@ jobs:
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "Using tag: $TAG"
 
-      - name: Build and push architecture-specific image
+      - name: Clean up existing manifest list (if any)
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
+        run: |
+          ARCH_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ matrix.arch.name }}"
+          echo "Checking if $ARCH_TAG exists and is a manifest list..."
+          
+          # 尝试检查 manifest
+          MANIFEST_OUTPUT=$(docker manifest inspect "$ARCH_TAG" 2>&1 || echo "not found")
+          
+          if echo "$MANIFEST_OUTPUT" | jq -e '.manifests' >/dev/null 2>&1; then
+            echo "⚠️  $ARCH_TAG is a manifest list, will be replaced with single image"
+            # 注意：无法通过 API 删除，但新推送会覆盖
+          else
+            echo "✓ $ARCH_TAG is already a single image or doesn't exist"
+          fi
+
+      - name: Build and push architecture-specific image (single tag at a time)
+        if: github.event_name != 'pull_request'
         uses: docker/build-push-action@v5
         with:
           context: ./frpc
           file: ./frpc/Dockerfile
           platforms: ${{ matrix.arch.platform }}
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ matrix.arch.name }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tags.outputs.tag }}-${{ matrix.arch.name }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}-${{ matrix.arch.name }}
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ matrix.arch.name }}
           build-args: |
             BUILD_FROM=ghcr.io/hassio-addons/base:14.2.0
           cache-from: type=gha,scope=${{ matrix.arch.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.arch.name }}
         timeout-minutes: 30
+
+      - name: Push additional tags for this architecture
+        if: github.event_name != 'pull_request'
+        run: |
+          ARCH=${{ matrix.arch.name }}
+          BASE_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${ARCH}"
+          
+          # 验证基础标签是单个镜像
+          MANIFEST_OUTPUT=$(docker manifest inspect "$BASE_TAG" 2>&1)
+          if echo "$MANIFEST_OUTPUT" | jq -e '.manifests' >/dev/null 2>&1; then
+            echo "❌ ERROR: $BASE_TAG is still a manifest list!"
+            exit 1
+          fi
+          
+          # 使用 docker manifest 获取镜像摘要，然后创建新标签
+          DIGEST=$(docker manifest inspect "$BASE_TAG" | jq -r '.config.digest // .layers[0].digest' | head -1)
+          
+          # 推送版本-架构标签（使用相同的镜像）
+          docker pull "$BASE_TAG"
+          docker tag "$BASE_TAG" "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tags.outputs.tag }}-${ARCH}"
+          docker push "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tags.outputs.tag }}-${ARCH}"
+          
+          # 推送版本标签-架构标签
+          docker tag "$BASE_TAG" "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}-${ARCH}"
+          docker push "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}-${ARCH}"
+          
+          echo "✓ Successfully pushed all tags for ${ARCH}"
 
       - name: Verify architecture tag is single image (not manifest list)
         if: github.event_name != 'pull_request'
