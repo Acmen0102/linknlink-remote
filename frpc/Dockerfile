@@ -7,10 +7,6 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # Setup base
 ARG FRP_VERSION=0.52.3
-ARG TARGETARCH=amd64
-
-# Copy scripts
-COPY scripts/ /tmp/scripts/
 
 # hadolint ignore=DL3003
 RUN \
@@ -18,9 +14,21 @@ RUN \
         wget \
         curl \
     \
-    && echo "TARGETARCH=${TARGETARCH}" \
-    && FRP_ARCH=$(/tmp/scripts/setup_frp.sh "${TARGETARCH}") \
-    && echo "FRP_ARCH=${FRP_ARCH}" \
+    && APK_ARCH=$(apk --print-arch) \
+    && echo "Detected architecture: ${APK_ARCH}" \
+    && FRP_ARCH=$( \
+        case "${APK_ARCH}" in \
+            x86_64) echo "amd64" ;; \
+            aarch64) echo "arm64" ;; \
+            armv7) echo "arm" ;; \
+            *) echo "unsupported" ;; \
+        esac \
+    ) \
+    && echo "FRP architecture: ${FRP_ARCH}" \
+    && if [ "${FRP_ARCH}" = "unsupported" ]; then \
+        echo "Error: Unsupported architecture: ${APK_ARCH}" && \
+        exit 1; \
+    fi \
     && FRP_URL="https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/frp_${FRP_VERSION}_linux_${FRP_ARCH}.tar.gz" \
     && echo "Downloading frp v${FRP_VERSION} for ${FRP_ARCH} from: ${FRP_URL}" \
     && wget -q --timeout=30 --tries=3 "${FRP_URL}" -O /tmp/frp.tar.gz \

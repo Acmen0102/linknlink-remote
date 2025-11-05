@@ -92,21 +92,13 @@ jobs:
           PLATFORM=${{ matrix.arch.platform }}
           IMAGE_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${ARCH}"
           
-          # Map architecture names for TARGETARCH
-          case ${ARCH} in
-            aarch64) TARGETARCH="arm64" ;;
-            amd64) TARGETARCH="amd64" ;;
-            armv7) TARGETARCH="arm" ;;
-            *) TARGETARCH="${ARCH}" ;;
-          esac
-          
-          echo "Building ${ARCH} image for platform ${PLATFORM} (TARGETARCH=${TARGETARCH})..."
+          echo "Building ${ARCH} image for platform ${PLATFORM}..."
+          echo "Note: Architecture will be auto-detected at runtime using 'apk --print-arch'"
           
           docker buildx build \
             --platform ${PLATFORM} \
             --file ./frpc/Dockerfile \
             --build-arg BUILD_FROM=ghcr.io/hassio-addons/base:18.2.1 \
-            --build-arg TARGETARCH=${TARGETARCH} \
             --tag ${IMAGE_TAG} \
             --push \
             --cache-from type=gha,scope=${ARCH} \
