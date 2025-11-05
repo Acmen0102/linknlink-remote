@@ -1,0 +1,16 @@
+---
+name: PR Labels
+
+# yamllint disable-line rule:truthy
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - closed
+
+jobs:
+  workflows:
+    uses: hassio-addons/workflows/.github/workflows/pr-labels.yaml@main
+

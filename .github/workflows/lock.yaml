@@ -1,0 +1,13 @@
+---
+name: Lock
+
+# yamllint disable-line rule:truthy
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+jobs:
+  workflows:
+    uses: hassio-addons/workflows/.github/workflows/lock.yaml@main
+
