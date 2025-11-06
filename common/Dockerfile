@@ -10,9 +10,12 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # Install dependencies and download FRPC
 RUN \
-    apk add --no-cache --virtual .build-dependencies \
-        wget \
+    apk add --no-cache \
         curl \
+        jq \
+        util-linux \
+    && apk add --no-cache --virtual .build-dependencies \
+        wget \
     \
     && APK_ARCH=$(apk --print-arch) \
     && echo "Detected architecture: ${APK_ARCH}" \

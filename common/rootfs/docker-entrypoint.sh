@@ -2,88 +2,388 @@
 
 bashio::log.info "Preparing to start FRPC Client..."
 
-# 从配置中读取参数
-SERVER_ADDR=$(bashio::config 'server_addr')
-SERVER_PORT=$(bashio::config 'server_port')
-TOKEN=$(bashio::config 'token')
-LOCAL_IP=$(bashio::config 'local_ip')
-LOCAL_PORT=$(bashio::config 'local_port')
-SECRET_KEY=$(bashio::config 'secret_key')
-PROXY_NAME=$(bashio::config 'proxy_name')
-PROTOCOL=$(bashio::config 'protocol')
-LOG_LEVEL=$(bashio::config 'log_level')
-LOG_MAX_DAYS=$(bashio::config 'log_max_days')
-
-# 读取预留配置（后续实现）
-AUTH_ENABLED=$(bashio::config 'authentication.enabled' false)
+# 从配置中读取账号密码
 AUTH_ACCOUNT=$(bashio::config 'authentication.account' "")
 AUTH_PASSWORD=$(bashio::config 'authentication.password' "")
 
-THIRD_PARTY_ENABLED=$(bashio::config 'third_party.enabled' false)
-THIRD_PARTY_PROVIDER=$(bashio::config 'third_party.provider' "")
-THIRD_PARTY_API_KEY=$(bashio::config 'third_party.api_key' "")
-THIRD_PARTY_API_SECRET=$(bashio::config 'third_party.api_secret' "")
-
 # 验证必需参数
-if [ -z "$SERVER_ADDR" ]; then
-    bashio::exit.nok "server_addr cannot be empty"
+if [ -z "$AUTH_ACCOUNT" ]; then
+    bashio::exit.nok "authentication.account cannot be empty"
 fi
 
-if [ -z "$SERVER_PORT" ]; then
-    bashio::exit.nok "server_port cannot be empty"
+if [ -z "$AUTH_PASSWORD" ]; then
+    bashio::exit.nok "authentication.password cannot be empty"
 fi
 
 # 配置文件路径
 CONFIG_FILE="/config/frpc.toml"
+TEMP_DIR="/tmp/frpc_setup"
+mkdir -p "$TEMP_DIR"
+cd "$TEMP_DIR" || exit 1
 
 # 确保配置目录存在
 mkdir -p "$(dirname "$CONFIG_FILE")"
 
-bashio::log.info "Generating FRPC configuration file: $CONFIG_FILE"
+# =============================================================================
+# 函数：获取设备ID（MAC地址或UUID）
+# =============================================================================
+get_device_id() {
+    local device_id=""
+    
+    # 尝试获取MAC地址
+    # 优先使用eth0，如果没有则使用其他网络接口
+    local mac=""
+    if [ -f /sys/class/net/eth0/address ]; then
+        mac=$(cat /sys/class/net/eth0/address 2>/dev/null | tr -d ':' | tr '[:lower:]' '[:upper:]')
+    else
+        # 尝试获取第一个非lo接口的MAC地址
+        for iface in /sys/class/net/*; do
+            if [ -f "$iface/address" ]; then
+                local ifname=$(basename "$iface")
+                if [ "$ifname" != "lo" ]; then
+                    mac=$(cat "$iface/address" 2>/dev/null | tr -d ':' | tr '[:lower:]' '[:upper:]')
+                    if [ -n "$mac" ]; then
+                        break
+                    fi
+                fi
+            fi
+        done
+    fi
+    
+    # 如果获取到MAC地址，格式化为32位（前面补0）
+    if [ -n "$mac" ] && [ ${#mac} -le 32 ]; then
+        # 计算需要补0的个数
+        local padding=$((32 - ${#mac}))
+        if [ $padding -gt 0 ]; then
+            # 生成指定数量的0
+            local zeros=""
+            for ((i=0; i<padding; i++)); do
+                zeros="${zeros}0"
+            done
+            device_id="${zeros}${mac}"
+        else
+            device_id="$mac"
+        fi
+        bashio::log.info "Using MAC address as device ID: $device_id"
+    else
+        # 如果获取不到MAC地址，使用UUID
+        if command -v uuidgen &> /dev/null; then
+            device_id=$(uuidgen | tr -d '-' | tr '[:lower:]' '[:upper:]')
+            bashio::log.info "MAC address not available, using UUID as device ID: $device_id"
+        else
+            # 如果uuidgen也不可用，生成一个基于时间戳的ID
+            device_id=$(date +%s%N | sha256sum | head -c 32 | tr '[:lower:]' '[:upper:]')
+            bashio::log.warning "UUID generator not available, using generated ID: $device_id"
+        fi
+    fi
+    
+    echo "$device_id"
+}
 
-# 生成 frpc 配置文件 (TOML 格式)
-cat > "$CONFIG_FILE" <<EOF
-# FRPC 配置文件
-# 由 Home Assistant Add-on 自动生成
+# =============================================================================
+# 函数：加密密码（使用SHA1）
+# =============================================================================
+encrypt_password() {
+    local password="$1"
+    local salt="4969fj#k23#"
+    local combined="${password}${salt}"
+    
+    # 使用sha1sum计算SHA1哈希，并提取十六进制字符串
+    echo -n "$combined" | sha1sum | cut -d' ' -f1
+}
 
-serverAddr = "${SERVER_ADDR}"
-serverPort = ${SERVER_PORT}
+# =============================================================================
+# 函数：调用登录接口获取companyid和userid
+# =============================================================================
+login() {
+    local account="$1"
+    local password="$2"
+    
+    bashio::log.info "Attempting to login with account: $account"
+    
+    # 对密码进行加密
+    local encrypted_password
+    encrypted_password=$(encrypt_password "$password")
+    
+    # 调用登录接口（使用email字段）
+    local login_url="https://euhome.linklinkiot.com/sfsaas/api/user/pwdlogin"
+    local login_data="{\"email\":\"$account\",\"password\":\"$encrypted_password\"}"
+    
+    bashio::log.debug "Login request URL: $login_url"
+    bashio::log.debug "Login request data: $login_data"
+    
+    local http_response
+    local http_code
+    local response
+    local curl_exit_code
+    
+    http_response=$(curl -s -w "\n%{http_code}" -X POST \
+        -H "Content-Type: application/json" \
+        -d "$login_data" \
+        "$login_url" 2>&1)
+    
+    curl_exit_code=$?
+    if [ $curl_exit_code -ne 0 ]; then
+        bashio::log.error "Login request failed (curl exit code: $curl_exit_code)"
+        bashio::exit.nok "Failed to connect to login server"
+    fi
+    
+    # 分离HTTP状态码和响应内容
+    http_code=$(echo "$http_response" | tail -n1)
+    response=$(echo "$http_response" | head -n -1)
+    
+    bashio::log.debug "Login HTTP status code: $http_code"
+    bashio::log.debug "Login response: $response"
+    
+    # 检查HTTP状态码
+    if [ "$http_code" != "200" ]; then
+        bashio::log.error "Login request failed with HTTP code: $http_code"
+        bashio::log.error "Response: $response"
+        bashio::exit.nok "Login request failed with HTTP code: $http_code"
+    fi
+    
+    # 解析响应
+    local status
+    local msg
+    if command -v jq &> /dev/null; then
+        # 使用jq解析JSON
+        status=$(echo "$response" | jq -r '.status' 2>/dev/null)
+        
+        # status不等于0就是有问题的，表示登录失败
+        if [ -z "$status" ] || [ "$status" = "null" ]; then
+            bashio::log.error "Invalid login response: missing status field"
+            bashio::exit.nok "Invalid login response format"
+        fi
+        
+        if [ "$status" != "0" ]; then
+            msg=$(echo "$response" | jq -r '.msg // .message // "Unknown error"' 2>/dev/null)
+            
+            # 特别处理-46009表示账号不存在
+            if [ "$status" = "-46009" ]; then
+                bashio::log.error "Login failed: Account does not exist (status: $status)"
+                bashio::log.error "Message: $msg"
+                bashio::exit.nok "Account does not exist, please contact HR to add the account"
+            else
+                bashio::log.error "Login failed with status: $status"
+                bashio::log.error "Message: $msg"
+                bashio::exit.nok "Login failed (status: $status): $msg"
+            fi
+        fi
+        
+        # 提取companyid和userid
+        COMPANY_ID=$(echo "$response" | jq -r '.info.companyid' 2>/dev/null)
+        USER_ID=$(echo "$response" | jq -r '.info.userid' 2>/dev/null)
+        
+        # 检查info字段是否存在
+        if [ "$COMPANY_ID" = "null" ] || [ -z "$COMPANY_ID" ]; then
+            bashio::log.error "Login response missing companyid"
+            bashio::exit.nok "Login response missing required field: companyid"
+        fi
+        
+        if [ "$USER_ID" = "null" ] || [ -z "$USER_ID" ]; then
+            bashio::log.error "Login response missing userid"
+            bashio::exit.nok "Login response missing required field: userid"
+        fi
+        
+        # 尝试获取account，如果没有则使用输入的account
+        ACCOUNT=$(echo "$response" | jq -r '.info.account // ""' 2>/dev/null)
+        if [ -z "$ACCOUNT" ] || [ "$ACCOUNT" = "null" ]; then
+            ACCOUNT="$account"
+        fi
+    else
+        # 如果没有jq，使用grep和sed解析
+        status=$(echo "$response" | grep -o '"status":[^,}]*' | grep -oE '-?[0-9]+' | head -n1 || echo "")
+        
+        if [ -z "$status" ]; then
+            bashio::log.error "Invalid login response: missing status field"
+            bashio::exit.nok "Invalid login response format"
+        fi
+        
+        # status不等于0就是有问题的，表示登录失败
+        if [ "$status" != "0" ]; then
+            msg=$(echo "$response" | sed -n 's/.*"msg"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+            
+            # 特别处理-46009表示账号不存在
+            if [ "$status" = "-46009" ]; then
+                bashio::log.error "Login failed: Account does not exist (status: $status)"
+                bashio::log.error "Message: $msg"
+                bashio::exit.nok "Account does not exist, please contact HR to add the account"
+            else
+                bashio::log.error "Login failed with status: $status"
+                bashio::log.error "Message: $msg"
+                bashio::exit.nok "Login failed (status: $status): $msg"
+            fi
+        fi
+        
+        COMPANY_ID=$(echo "$response" | sed -n 's/.*"companyid"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+        USER_ID=$(echo "$response" | sed -n 's/.*"userid"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+        
+        if [ -z "$COMPANY_ID" ]; then
+            bashio::log.error "Login response missing companyid"
+            bashio::exit.nok "Login response missing required field: companyid"
+        fi
+        
+        if [ -z "$USER_ID" ]; then
+            bashio::log.error "Login response missing userid"
+            bashio::exit.nok "Login response missing required field: userid"
+        fi
+        
+        ACCOUNT="$account"
+    fi
+    
+    bashio::log.info "Login successful - Company ID: $COMPANY_ID, User ID: $USER_ID"
+}
 
-# 日志配置
-log.level = "${LOG_LEVEL}"
-log.maxDays = ${LOG_MAX_DAYS}
-log.to = "/config/frpc.log"
-EOF
+# =============================================================================
+# 函数：注册frpc代理并获取配置
+# =============================================================================
+register_frpc_proxy() {
+    local device_id="$1"
+    local company_id="$2"
+    local user_id="$3"
+    local account="$4"
+    
+    bashio::log.info "Registering FRPC proxy with device ID: $device_id"
+    
+    # 构造proxyList JSON（直接使用变量，无需写文件）
+    local proxy_json='[{"serviceName":"HomeAssistant","localPort":8123,"bindPort":38123,"link":true}]'
+    
+    # 构造请求数据
+    local server_url="https://admin.linklinkiot.com/frpserver/api/proxy"
+    local json_data="{\"did\":\"$device_id\",\"name\":\"hassio\",\"type\":1,\"account\":\"$account\",\"proxyList\":$proxy_json}"
+    
+    bashio::log.debug "Registration request: $json_data"
+    
+    # 发送请求
+    local response_file="response.json"
+    local http_response
+    http_response=$(curl -s -w "\n%{http_code}" -X POST \
+        -H "Content-Type: application/json" \
+        -H "companyid: $company_id" \
+        -H "userid: $user_id" \
+        -d "$json_data" \
+        "$server_url" 2>&1)
+    
+    local http_code
+    http_code=$(echo "$http_response" | tail -n1)
+    local content
+    content=$(echo "$http_response" | head -n -1)
+    
+    bashio::log.debug "Registration response code: $http_code"
+    bashio::log.debug "Registration response: $content"
+    
+    # 检查HTTP状态码
+    if [ "$http_code" != "200" ]; then
+        bashio::log.error "Registration failed with HTTP code: $http_code"
+        bashio::log.error "Response: $content"
+        bashio::exit.nok "Failed to register FRPC proxy"
+    fi
+    
+    # 检查响应是否为JSON格式的错误信息
+    if [[ $content == \{* ]]; then
+        local status
+        if command -v jq &> /dev/null; then
+            status=$(echo "$content" | jq -r '.status' 2>/dev/null)
+            if [ "$status" != "null" ] && [ "$status" != "0" ]; then
+                local msg=$(echo "$content" | jq -r '.msg // .message // "Unknown error"' 2>/dev/null)
+                bashio::log.error "Registration failed: $msg"
+                bashio::exit.nok "Registration failed: $msg"
+            fi
+        else
+            # 使用grep检查status字段
+            status=$(echo "$content" | grep -o '"status":[^,}]*' | grep -o '[0-9]*' || echo "")
+            if [ -n "$status" ] && [ "$status" != "0" ]; then
+                bashio::log.error "Registration failed with status: $status"
+                bashio::exit.nok "Registration failed"
+            fi
+        fi
+    fi
+    
+    # 将响应保存为配置文件
+    echo "$content" > "$CONFIG_FILE"
+    
+    # 获取宿主机IP地址并替换配置文件中的127.0.0.1
+    local host_ip=""
+    # 方法1: 尝试通过默认网关获取宿主机IP（最可靠的方法）
+    if command -v ip &> /dev/null; then
+        host_ip=$(ip route | awk '/default/ {print $3}' | head -n1)
+    fi
+    
+    # 方法2: 如果方法1失败，尝试使用host.docker.internal（在某些Docker环境中可用）
+    if [ -z "$host_ip" ] || [ "$host_ip" = "" ]; then
+        if command -v getent &> /dev/null; then
+            host_ip=$(getent hosts host.docker.internal | awk '{print $1}' | head -n1)
+        fi
+    fi
+    
+    # 方法3: 如果前两种方法都失败，尝试从网络接口获取
+    if [ -z "$host_ip" ] || [ "$host_ip" = "" ]; then
+        # 获取默认网关IP（通常是宿主机IP）
+        if [ -f /proc/net/route ]; then
+            host_ip=$(awk '/^00000000/ {print $3}' /proc/net/route | head -n1)
+            # 将十六进制IP转换为点分十进制格式
+            if [ -n "$host_ip" ]; then
+                host_ip=$(printf "%d.%d.%d.%d" \
+                    $((0x${host_ip:6:2})) \
+                    $((0x${host_ip:4:2})) \
+                    $((0x${host_ip:2:2})) \
+                    $((0x${host_ip:0:2})) 2>/dev/null)
+            fi
+        fi
+    fi
+    
+    # 如果成功获取到宿主机IP，替换配置文件中的127.0.0.1
+    if [ -n "$host_ip" ] && [ "$host_ip" != "" ]; then
+        bashio::log.info "Detected host IP: $host_ip, replacing 127.0.0.1 in config file"
+        # 使用sed替换配置文件中的127.0.0.1为宿主机IP
+        sed -i "s/127\.0\.0\.1/$host_ip/g" "$CONFIG_FILE"
+        bashio::log.info "Successfully replaced 127.0.0.1 with $host_ip in configuration file"
+    else
+        bashio::log.warning "Could not detect host IP address, keeping 127.0.0.1 in config file"
+    fi
+    
+    bashio::log.info "FRPC configuration file generated successfully: $CONFIG_FILE"
+}
 
-# 如果提供了 token，添加认证
-if [ -n "$TOKEN" ]; then
-    echo "auth.token = \"${TOKEN}\"" >> "$CONFIG_FILE"
-fi
+# =============================================================================
+# 函数：显示设备信息
+# =============================================================================
+display_device_info() {
+    local device_id="$1"
+    
+    # 确保配置目录存在
+    mkdir -p "$(dirname "$CONFIG_FILE")"
+    
+    # 将 device_id 保存到文件，方便用户查看
+    local device_id_file="$(dirname "$CONFIG_FILE")/device_id.txt"
+    echo "$device_id" > "$device_id_file"
+    
+    # 以醒目的方式输出设备ID信息
+    bashio::log.info ""
+    bashio::log.info "=========================================="
+    bashio::log.info "  设备ID (Device ID): $device_id"
+    bashio::log.info "=========================================="
+    bashio::log.info ""
+    bashio::log.info "设备ID已保存到文件: $device_id_file"
+    bashio::log.info "您可以在 Home Assistant 的配置目录中查看此文件"
+    bashio::log.info ""
+}
 
-# 添加代理配置
-cat >> "$CONFIG_FILE" <<EOF
+# =============================================================================
+# 主流程
+# =============================================================================
 
-# 代理配置
-[[proxies]]
-name = "${PROXY_NAME}"
-type = "${PROTOCOL}"
-localIP = "${LOCAL_IP}"
-localPort = ${LOCAL_PORT}
-secretKey = ${SECRET_KEY}
-EOF
+# 1. 获取设备ID
+DEVICE_ID=$(get_device_id)
 
-# 如果是 HTTP/HTTPS 协议，添加额外配置
-if [ "$PROTOCOL" = "http" ] || [ "$PROTOCOL" = "https" ]; then
-    cat >> "$CONFIG_FILE" <<EOF
+# 显示设备信息
+display_device_info "$DEVICE_ID"
 
-# HTTP/HTTPS 特定配置
-customDomains = ["${PROXY_NAME}"]
-EOF
-fi
+# 2. 调用登录接口
+login "$AUTH_ACCOUNT" "$AUTH_PASSWORD"
 
-bashio::log.info "Configuration file generated successfully"
-bashio::log.debug "Configuration content:"
-cat "$CONFIG_FILE" | bashio::log.debug
+# 3. 注册frpc代理并获取配置
+register_frpc_proxy "$DEVICE_ID" "$COMPANY_ID" "$USER_ID" "$ACCOUNT"
 
 # 检查 frpc 可执行文件
 if [ ! -x "/usr/local/bin/frpc" ]; then
@@ -91,19 +391,13 @@ if [ ! -x "/usr/local/bin/frpc" ]; then
 fi
 
 bashio::log.info "Starting FRPC..."
-bashio::log.info "Server address: ${SERVER_ADDR}:${SERVER_PORT}"
-bashio::log.info "Local address: ${LOCAL_IP}:${LOCAL_PORT}"
-bashio::log.info "Proxy name: ${PROXY_NAME}"
-bashio::log.info "Protocol: ${PROTOCOL}"
+bashio::log.info "Configuration file: $CONFIG_FILE"
+bashio::log.debug "Configuration content:"
+cat "$CONFIG_FILE" | bashio::log.debug
 
-# 显示预留配置状态（后续实现具体功能）
-if [ "$AUTH_ENABLED" = "true" ]; then
-    bashio::log.info "Authentication feature enabled (development in progress)"
-fi
-
-if [ "$THIRD_PARTY_ENABLED" = "true" ]; then
-    bashio::log.info "Third-party service feature enabled (development in progress)"
-fi
+# 清理临时目录
+cd / || exit 1
+rm -rf "$TEMP_DIR"
 
 # 启动 frpc
 exec /usr/local/bin/frpc -c "$CONFIG_FILE"
