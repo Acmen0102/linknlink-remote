@@ -3,7 +3,7 @@ FROM $BUILD_FROM as base
 
 ENV LANG C.UTF-8
 ARG BUILD_VERSION
-ARG FRP_VERSION=0.52.3
+ARG FRP_VERSION=0.65.0
 
 # Set shell
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
