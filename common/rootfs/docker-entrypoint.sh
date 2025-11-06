@@ -318,8 +318,6 @@ register_frpc_proxy() {
     #     sed -i "s/127\.0\.0\.1/$host_ip/g" "$CONFIG_FILE"
     # fi
     
-    bashio::log.info "Using host network mode - 127.0.0.1 refers to the host machine"
-    
     bashio::log.info "FRPC configuration file generated successfully: $CONFIG_FILE"
 }
 
