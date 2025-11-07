@@ -2,7 +2,7 @@
   "name": "FRPC Client",
   "version": "1.0.8",
   "slug": "frpc",
-  "description": "FRP Client (frpc) add-on for Home Assistant. Establish reverse proxy connections to FRP servers via LinknLink platform.",
+  "description": "通过 LinknLink 平台实现 Home Assistant 远程访问。只需账号密码，自动完成设备注册和代理配置。",
   "url": "https://github.com/acmen0102/linknlink-remote",
   "startup": "services",
   "boot": "auto",

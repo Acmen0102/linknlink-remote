@@ -1,0 +1,12 @@
+---
+configuration:
+  authentication:
+    name: Authentication
+    description: LinknLink platform credentials
+  email:
+    name: Email
+    description: Your LinknLink platform account email
+  password:
+    name: Password
+    description: Your LinknLink platform account password
+
