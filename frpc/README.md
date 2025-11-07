@@ -56,7 +56,7 @@ authentication:
 - **email**: 您的 LinknLink 平台账号邮箱
 - **password**: 您的 LinknLink 平台账号密码
 
-> **注意**：如果您还没有 LinknLink 账号，请联系管理员申请开通。
+> **注意**：如果您还没有 LinknLink 账号，请使用LinknLink APP注册开通。
 
 ### 启动 Add-on
 

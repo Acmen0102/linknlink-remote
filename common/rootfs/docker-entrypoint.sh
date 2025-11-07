@@ -234,7 +234,7 @@ login() {
         ACCOUNT="$account"
     fi
     
-    bashio::log.info "Login successful - Company ID: $COMPANY_ID, User ID: $USER_ID"
+    bashio::log.info "Login successful - User ID: $USER_ID"
 }
 
 # =============================================================================
