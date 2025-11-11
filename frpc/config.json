@@ -24,7 +24,7 @@
       "email": "str",
       "password": "password"
     },
-    "log_level": "select(trace|debug|info|notice|warning|error|fatal)"
+    "log_level": "match(trace|debug|info|notice|warning|error|fatal)"
   },
   "ports": {},
   "ports_description": {},
