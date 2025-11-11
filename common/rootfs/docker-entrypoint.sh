@@ -31,6 +31,18 @@ mkdir -p "$(dirname "$CONFIG_FILE")"
 # =============================================================================
 get_device_id() {
     local device_id=""
+    local stored_file="/config/device_id.txt"
+
+    # 优先使用持久化存储的设备ID
+    if [ -f "$stored_file" ]; then
+        local saved_id
+        saved_id=$(cat "$stored_file" 2>/dev/null | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
+        if [ -n "$saved_id" ]; then
+            bashio::log.info "Using stored device ID: $saved_id"
+            echo "$saved_id"
+            return
+        fi
+    fi
     
     # 尝试获取MAC地址
     # 优先使用eth0，如果没有则使用其他网络接口
@@ -82,6 +94,10 @@ get_device_id() {
     # 将 device_id 转换为小写
     device_id=$(echo "$device_id" | tr '[:upper:]' '[:lower:]')
     
+    # 持久化保存设备ID，确保重启或重新安装后仍然固定
+    echo "$device_id" > "$stored_file"
+    bashio::log.info "Persisted generated device ID: $device_id"
+
     echo "$device_id"
 }
 
