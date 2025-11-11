@@ -466,7 +466,7 @@ cleanup() {
     fi
 
     if [ -x "$HEARTBEAT_SCRIPT" ]; then
-        "$HEARTBEAT_SCRIPT" "$DEVICE_ID" "$COMPANY_ID" "$USER_ID"
+        BASHIO_LOG_LEVEL="${LOG_LEVEL}" "$HEARTBEAT_SCRIPT" "$DEVICE_ID" "$COMPANY_ID" "$USER_ID"
     fi
 
     exit "$exit_code"
@@ -478,7 +478,7 @@ if [ -x "$HEARTBEAT_SCRIPT" ]; then
     bashio::log.info "Starting FRPC heartbeat task (interval ${HEARTBEAT_INTERVAL}s)..."
     (
         while true; do
-            "$HEARTBEAT_SCRIPT" "$DEVICE_ID" "$COMPANY_ID" "$USER_ID" "$FRPC_PID" || true
+            BASHIO_LOG_LEVEL="${LOG_LEVEL}" "$HEARTBEAT_SCRIPT" "$DEVICE_ID" "$COMPANY_ID" "$USER_ID" "$FRPC_PID" || true
             sleep "$HEARTBEAT_INTERVAL" &
             wait $!
         done
@@ -500,7 +500,7 @@ fi
 
 # 上报最终一次心跳，标记为未运行
 if [ -x "$HEARTBEAT_SCRIPT" ]; then
-    "$HEARTBEAT_SCRIPT" "$DEVICE_ID" "$COMPANY_ID" "$USER_ID"
+    BASHIO_LOG_LEVEL="${LOG_LEVEL}" "$HEARTBEAT_SCRIPT" "$DEVICE_ID" "$COMPANY_ID" "$USER_ID"
 fi
 
 exit "$FRPC_EXIT_CODE"
