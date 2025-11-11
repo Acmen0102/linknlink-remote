@@ -31,7 +31,12 @@ mkdir -p "$(dirname "$CONFIG_FILE")"
 # =============================================================================
 get_device_id() {
     local device_id=""
-    local stored_file="/config/device_id.txt"
+    local data_dir="/data"
+    local stored_file="${data_dir}/device_id.txt"
+    local addon_slug="frpc"
+
+    # 确保数据目录存在
+    mkdir -p "$data_dir"
 
     # 优先使用持久化存储的设备ID
     if [ -f "$stored_file" ]; then
@@ -44,6 +49,40 @@ get_device_id() {
         fi
     fi
     
+    # 如果持久化文件不存在，尝试基于Supervisor的UUID生成确定性的设备ID
+    if [ -z "$device_id" ]; then
+        if [ -n "${SUPERVISOR_TOKEN:-}" ]; then
+            local supervisor_response=""
+            supervisor_response=$(curl -s --fail \
+                -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
+                -H "Content-Type: application/json" \
+                "http://supervisor/info" 2>/dev/null || true)
+
+            if [ -n "$supervisor_response" ]; then
+                local supervisor_uuid=""
+                if command -v jq &> /dev/null; then
+                    supervisor_uuid=$(echo "$supervisor_response" | jq -r '.data.uuid // empty' 2>/dev/null)
+                else
+                    supervisor_uuid=$(echo "$supervisor_response" | sed -n 's/.*"uuid"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)
+                fi
+
+                if [ -n "$supervisor_uuid" ]; then
+                    device_id=$(echo -n "${supervisor_uuid}_${addon_slug}" | sha256sum | head -c 32 | tr '[:upper:]' '[:lower:]')
+                    bashio::log.info "Generated deterministic device ID from supervisor UUID: $device_id"
+                    echo "$device_id" > "$stored_file"
+                    echo "$device_id"
+                    return
+                else
+                    bashio::log.warning "Unable to parse supervisor UUID, fallback to MAC/UUID generation."
+                fi
+            else
+                bashio::log.warning "Failed to query supervisor info for deterministic device ID."
+            fi
+        else
+            bashio::log.warning "SUPERVISOR_TOKEN missing, cannot query supervisor info."
+        fi
+    fi
+
     # 尝试获取MAC地址
     # 优先使用eth0，如果没有则使用其他网络接口
     local mac=""
